@@ -1,0 +1,62 @@
+# The commit-time lane: the fast half of CI, run before a commit lands instead of after a
+# push, plus the commit-message check CI has no seat for.
+#
+# Install (one-off, per clone):
+#     git config core.hooksPath .githooks
+#
+# NOT `pre-commit install`. That writes hooks which shell out to the bare `pre-commit`
+# executable shim, and a machine that enforces binary reputation can refuse to run it -
+# leaving `.git/hooks/` looking armed while nothing runs, which is worse than no hook at
+# all. The tracked scripts in `.githooks/` call this config through
+# `uv run python -m pre_commit` instead, which also pins the project's own interpreter.
+#
+# Run the lane by hand:
+#     uv run python -m pre_commit run --all-files
+#
+# WHAT IS DELIBERATELY ABSENT, because an omission and a trade-off look identical from
+# outside: `radar gate`. The gate reads the whole governed tree, which is a per-machine
+# fact a hook cannot assume and a CI runner does not have at all - so it says which of its
+# checks could not run, and it is CI's step rather than a commit's.
+repos:
+  - repo: local
+    hooks:
+      # Local `language: system` hooks so the version is the lock file's rather than a
+      # second pinned copy that drifts from CI's. A catalogue with no Python of its own
+      # stages no Python, and the hooks are skipped; they start biting the day you add a
+      # helper under the prefix `radar.toml [changelog].prefixes` names.
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: ruff-format-check
+        name: ruff format --check
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+  # Commit-message lane (the .githooks/commit-msg wrapper runs it). A conventional subject
+  # is what lets a tool read the history: the changelog gate reads commit messages for its
+  # exemption trailer, and a release reads them to find what moved.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.0.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          - feat
+          - fix
+          - docs
+          - style
+          - refactor
+          - perf
+          - test
+          - chore
+          - build
+          - ci
+          - release

@@ -1,0 +1,161 @@
+name: ci
+
+# Least privilege: every job checks out the tree and runs local tooling, and nothing here
+# calls a write API.
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          # The DECLARED FLOOR from pyproject.toml, not the newest release: the floor is a
+          # claim and nothing else checks it, so pinning it here exercises both ends of the
+          # supported range instead of assuming one.
+          python-version: '3.11'
+
+      # `uv lock --check` is FIRST, before anything that would rewrite the lock: no test can
+      # guard lock staleness, because `uv run` re-locks before a test could read the file.
+      - run: uv lock --check
+      - run: uv sync
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run ty check src
+      - run: uv run python -m pytest -q
+
+  stranger-path:
+    # The stranger's path - init, add, gate and render in a directory that has never held a
+    # catalogue - exercised through the PACKAGED engine rather than through
+    # `python -m stack_radar.<module>` on a PYTHONPATH. The suite already runs that path
+    # (tests/test_init.py::TestTheStrangerPath) against the checkout's own src/ tree; what it
+    # cannot catch is a packaging defect - a template left out of the wheel, an entry point
+    # that resolves in a dev checkout and nowhere else - because it never leaves the tree.
+    # This job builds the distribution, installs it into a venv that has never seen this
+    # repository's source layout, and runs `radar` from there in a directory that has never
+    # held a catalogue.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: '3.11'
+
+      - run: uv build
+
+      - name: Install the built wheel into a clean environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv "$RUNNER_TEMP/stranger-venv"
+          uv pip install --python "$RUNNER_TEMP/stranger-venv" dist/*.whl
+
+      - name: Put the installed radar on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/stranger-venv"
+          if [ -d "$venv/Scripts" ]; then
+            echo "$venv/Scripts" >> "$GITHUB_PATH"
+          else
+            echo "$venv/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: init, add, gate, render - in a directory that never held a catalogue
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/a-strangers-radar"
+          home="$RUNNER_TEMP/empty-claude-home"
+          mkdir -p "$home"
+
+          radar init "$target"
+          cd "$target"
+          radar add just --repo https://github.com/casey/just --axis python-engineering \
+            --ring observe --license CC0-1.0 --visibility public --artifact cli \
+            --note "a command runner, the engine's own neutral example entry" \
+            --reason "packaging smoke test - the stranger's path, in CI"
+
+          output="$(radar gate --claude-home "$home")"
+          echo "$output"
+          grep -q "0 FAIL" <<< "$output"
+
+          radar render
+          test -s README.md
+          test -s docs/radar/index.html
+
+  no-root:
+    # The resolver's other half: a command run where no `radar.toml` is above
+    # the working directory exits distinctly rather than silently reading a wrong catalogue
+    # or reporting a clean one. Exit 2 is the gate's own contract (radar_lib.begin_command) -
+    # 1 is spent on FAIL findings, so "there was no catalogue to judge" has to be a different
+    # number - and the failure names the marker rather than leaving the fix to be guessed at.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: '3.11'
+      - run: uv sync
+
+      - name: Put the synced venv on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d .venv/Scripts ]; then
+            echo "$PWD/.venv/Scripts" >> "$GITHUB_PATH"
+          else
+            echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: radar gate outside any data root exits non-zero, naming radar.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          outside="$RUNNER_TEMP/no-radar-here"
+          mkdir -p "$outside"
+          cd "$outside"
+          set +e
+          output="$(radar gate 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          test "$status" -eq 2
+          grep -q "radar.toml" <<< "$output"
+
+  zizmor:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - run: uvx zizmor==1.30.0 --min-severity high .github/workflows
+        env:
+          GH_TOKEN: ${{ github.token }}

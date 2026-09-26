@@ -1,0 +1,34 @@
+# tools/
+
+One TOML file per entry, and the file name is the entry: `tools/ruff.toml` holds the tool
+called `ruff`. Everything the radar knows about a tool lives in its own file, so a change to
+one entry is a diff a reviewer can read, and the catalogue has no index to keep in step.
+
+Write one with `radar add`, which validates before it writes rather than after:
+
+```
+radar add ruff \
+  --repo https://github.com/astral-sh/ruff \
+  --axis python-engineering --artifact cli --ring observe \
+  --license MIT --visibility public \
+  --note "Linter and formatter; a candidate for the lint lane" \
+  --reason "Entered the catalogue on first look"
+```
+
+Eight fields are required — `name`, `repo`, `axis`, `ring`, `license`, `visibility`, `note`,
+`artifact` — and every entry carries at least one dated `[[history]]` block. `axis` says
+which problem the tool addresses; `artifact` says what you install and where it runs, which
+is what decides context cost and blast radius. Run `radar add --help` for the values each
+field accepts, and `radar gate` for what an entry has to satisfy beyond its shape:
+
+- a `pilot` entry needs `[pilot_exit]` — what would adopt it and what would decline it,
+  written BEFORE the data exists, which is the only property that makes it worth anything;
+- an `own` or `adopt` entry whose artifact is visible in a session needs a `[telemetry]`
+  matcher, because a ring is a claim about observed state and a claim with no instrument is
+  not checkable;
+- a `public` entry needs `repo` as a URL, because the public projection renders it as a
+  link.
+
+Machine-local entries — in-house tooling whose NAME must not travel — go in `tools.local/`
+instead, which is gitignored. The engine loads them, the gate judges them, and the renderer
+drops them before writing any tracked file.

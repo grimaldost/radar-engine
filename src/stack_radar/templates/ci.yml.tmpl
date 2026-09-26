@@ -1,0 +1,78 @@
+name: ci
+
+# A SCAFFOLD, and it says so rather than pretending to be green. Two things are not true of
+# a catalogue the moment it is created, and each makes one step red for a reason the log
+# states plainly:
+#
+#   * `uv lock --check` needs a lock file. Run `uv lock` once and commit `uv.lock`.
+#   * the two `uvx` steps need the engine to be resolvable from this runner. If you
+#     installed it from somewhere other than a public index, point them at that somewhere.
+#
+# Two operating systems, for a reason rather than for symmetry: paths, the invariant scan's
+# directory walk and every profile in `environments/` behave differently on the two, and a
+# line-ending class of failure - identical counts, diverging digests - is invisible to a
+# single-platform leg.
+
+# Least privilege: every job checks out the tree and runs local tooling, and nothing here
+# calls a write API.
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          # The DECLARED FLOOR from `pyproject.toml`, not the newest release: the floor is a
+          # claim and nothing else checks it, so pinning it here exercises both ends of the
+          # supported range instead of assuming one.
+          python-version: '3.11'
+
+      # `uv lock --check` is FIRST, before anything that would rewrite the lock: no test can
+      # guard lock staleness, because `uv run` re-locks before a test could read the file.
+      - run: uv lock --check
+      - run: uv sync
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+
+      # THE SUITE, commented out because a fresh catalogue has none and `pytest` exits 5
+      # when it collects nothing - a red run whose only content is that there was nothing to
+      # run. Arm it on the day you write the first test.
+      # - run: uv run python -m pytest -q
+
+      # The backing gate. On a runner there is no governed tree checked out and no
+      # machine-local entries, so some of its checks cannot run - it names which, by name,
+      # and everything repo-only (schema, licences, staleness, telemetry keys, pilot-exit
+      # rules, version sites) still runs and can still fail here.
+      - run: uvx --from stack-radar==__ENGINE_VERSION__ radar gate
+      - run: uvx --from stack-radar==__ENGINE_VERSION__ radar check-version-sites
+
+      # NOT HERE, and the reason is mechanical rather than a preference: the changelog gate
+      # compares a branch against the base it will merge into, so it needs a base ref and
+      # belongs in a workflow triggered on `pull_request` alone:
+      #     uvx --from stack-radar==__ENGINE_VERSION__ radar changelog-gate "origin/$BASE_REF"
+
+  zizmor:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - run: uvx zizmor==1.30.0 --min-severity high .github/workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
